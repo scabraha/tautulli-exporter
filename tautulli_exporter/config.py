@@ -1,4 +1,11 @@
-"""Runtime configuration for the exporter."""
+"""Runtime configuration for the exporter.
+
+Three independent poll cadences are exposed so cheap calls (active session
+state) refresh quickly while expensive ones (database tables, plex.tv
+update probe) refresh slowly. Defaults are tuned so a freshly deployed
+exporter polls noticeably faster than the legacy single-loop design while
+issuing fewer total API calls per minute.
+"""
 
 from __future__ import annotations
 
@@ -17,12 +24,15 @@ class Config:
     tautulli_url: str
     api_key: str
     exporter_port: int = 9487
-    poll_interval: int = 30
+    activity_poll_interval: int = 10
+    inventory_poll_interval: int = 300
+    meta_poll_interval: int = 1800
     request_timeout: int = 10
     log_level: str = "INFO"
     log_format: str = "text"
     geoip_enabled: bool = True
     geoip_cache_ttl: int = 3600
+    library_size_enabled: bool = False
 
     def sanitized(self) -> dict:
         """Return the config as a dict with secrets redacted, for logging."""
@@ -52,16 +62,25 @@ class Config:
         if log_format not in ("text", "json"):
             raise ConfigError(f"LOG_FORMAT must be 'text' or 'json', got {log_format!r}")
 
+        if "POLL_INTERVAL" in env:
+            raise ConfigError(
+                "POLL_INTERVAL has been removed. Use ACTIVITY_POLL_INTERVAL "
+                "(default 10) — see README for the new tiered polling design."
+            )
+
         return cls(
             tautulli_url=url.rstrip("/"),
             api_key=api_key,
             exporter_port=_int(env, "EXPORTER_PORT", 9487),
-            poll_interval=_int(env, "POLL_INTERVAL", 30),
+            activity_poll_interval=_positive_int(env, "ACTIVITY_POLL_INTERVAL", 10),
+            inventory_poll_interval=_positive_int(env, "INVENTORY_POLL_INTERVAL", 300),
+            meta_poll_interval=_positive_int(env, "META_POLL_INTERVAL", 1800),
             request_timeout=_int(env, "REQUEST_TIMEOUT", 10),
             log_level=env.get("LOG_LEVEL", "INFO").upper(),
             log_format=log_format,
             geoip_enabled=_bool(env, "GEOIP_ENABLED", True),
             geoip_cache_ttl=_int(env, "GEOIP_CACHE_TTL", 3600),
+            library_size_enabled=_bool(env, "LIBRARY_SIZE_ENABLED", False),
         )
 
 
@@ -73,6 +92,13 @@ def _int(env: dict[str, str], key: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ConfigError(f"{key} must be an integer, got {raw!r}") from exc
+
+
+def _positive_int(env: dict[str, str], key: str, default: int) -> int:
+    value = _int(env, key, default)
+    if value <= 0:
+        raise ConfigError(f"{key} must be a positive integer, got {value}")
+    return value
 
 
 def _bool(env: dict[str, str], key: str, default: bool) -> bool:
