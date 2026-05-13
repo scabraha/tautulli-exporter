@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tautulli-exporter"
+version = "1.0.0"
+description = "Prometheus exporter for Tautulli (Plex) playback activity and library statistics"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "prometheus-client==0.22.1",
+    "requests==2.32.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+]
+
+[project.scripts]
+tautulli-exporter = "tautulli_exporter.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["tautulli_exporter*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
