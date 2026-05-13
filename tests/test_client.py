@@ -72,6 +72,9 @@ def test_call_raises_http_error_includes_body(client):
     assert "db down" in str(exc_info.value)
 
 
+# -- get_activity --------------------------------------------------------
+
+
 @responses.activate
 def test_get_activity_returns_dict(client):
     responses.get(
@@ -87,6 +90,9 @@ def test_get_activity_returns_dict(client):
 def test_get_activity_returns_empty_when_data_missing(client):
     responses.get("http://tautulli.test/api/v2", json=_ok(None))
     assert client.get_activity() == {}
+
+
+# -- get_libraries / table -----------------------------------------------
 
 
 @responses.activate
@@ -106,6 +112,64 @@ def test_get_libraries_returns_empty_when_data_not_a_list(client):
 
 
 @responses.activate
+def test_get_libraries_table_unwraps_data(client):
+    responses.get(
+        "http://tautulli.test/api/v2",
+        json=_ok({"draw": 1, "data": [{"section_name": "Movies", "plays": 7}]}),
+    )
+    rows = client.get_libraries_table()
+    assert rows == [{"section_name": "Movies", "plays": 7}]
+
+
+@responses.activate
+def test_get_libraries_table_handles_missing_data(client):
+    responses.get("http://tautulli.test/api/v2", json=_ok({"draw": 1}))
+    assert client.get_libraries_table() == []
+
+
+@responses.activate
+def test_get_library_media_info_returns_dict(client):
+    responses.get(
+        "http://tautulli.test/api/v2",
+        json=_ok({"total_file_size": 12345, "data": []}),
+    )
+    info = client.get_library_media_info(7)
+    assert info["total_file_size"] == 12345
+
+
+# -- get_users / table ---------------------------------------------------
+
+
+@responses.activate
+def test_get_users_returns_list(client):
+    responses.get(
+        "http://tautulli.test/api/v2",
+        json=_ok([{"user_id": 1, "is_active": 1, "is_home_user": 1}]),
+    )
+    users = client.get_users()
+    assert users[0]["user_id"] == 1
+
+
+@responses.activate
+def test_get_users_returns_empty_on_unexpected_shape(client):
+    responses.get("http://tautulli.test/api/v2", json=_ok({"oops": True}))
+    assert client.get_users() == []
+
+
+@responses.activate
+def test_get_users_table_unwraps_data(client):
+    responses.get(
+        "http://tautulli.test/api/v2",
+        json=_ok({"data": [{"friendly_name": "alice", "plays": 5}]}),
+    )
+    rows = client.get_users_table()
+    assert rows[0]["friendly_name"] == "alice"
+
+
+# -- server info / status ------------------------------------------------
+
+
+@responses.activate
 def test_get_server_info(client):
     responses.get(
         "http://tautulli.test/api/v2",
@@ -114,6 +178,28 @@ def test_get_server_info(client):
     info = client.get_server_info()
     assert info["pms_version"] == "1.40.0"
     assert info["pms_name"] == "media"
+
+
+@responses.activate
+def test_get_server_status(client):
+    responses.get(
+        "http://tautulli.test/api/v2", json=_ok({"connected": True}),
+    )
+    assert client.get_server_status() == {"connected": True}
+
+
+@responses.activate
+def test_get_pms_update(client):
+    responses.get(
+        "http://tautulli.test/api/v2",
+        json=_ok({"update_available": True, "version": "1.41.0"}),
+    )
+    info = client.get_pms_update()
+    assert info["update_available"] is True
+    assert info["version"] == "1.41.0"
+
+
+# -- geoip ---------------------------------------------------------------
 
 
 @responses.activate

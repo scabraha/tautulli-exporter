@@ -4,6 +4,10 @@ Tautulli's API surface lives at ``/api/v2`` and uses a query-string
 ``cmd=`` for the operation plus ``apikey=`` for auth. Every successful
 response wraps the payload in ``{"response": {"result": "success",
 "data": ...}}`` so callers don't have to repeat that unwrap themselves.
+
+Convenience wrappers are kept thin (one Tautulli command each) so the
+poll-step modules can compose them without re-implementing the unwrap
+logic, and so each one can be stubbed independently in tests.
 """
 
 from __future__ import annotations
@@ -104,9 +108,68 @@ class TautulliClient:
         data = self.call("get_libraries")
         return data if isinstance(data, list) else []
 
+    def get_libraries_table(self) -> list[dict[str, Any]]:
+        """Return the libraries-table view (richer per-library stats).
+
+        Tautulli's ``get_libraries_table`` returns ``{"data": [...]}``
+        wrapped in DataTables pagination metadata; we hand back just the
+        ``data`` rows since that's all the inventory step cares about.
+        """
+        data = self.call("get_libraries_table", length=1000)
+        if isinstance(data, dict):
+            rows = data.get("data") or []
+            return rows if isinstance(rows, list) else []
+        return []
+
+    def get_library_media_info(self, section_id: str | int) -> dict[str, Any]:
+        """Return ``get_library_media_info`` payload for a single section.
+
+        Used only when ``LIBRARY_SIZE_ENABLED`` is on; this call walks
+        Tautulli's media_info table and can be slow for huge libraries.
+        """
+        data = self.call(
+            "get_library_media_info",
+            section_id=section_id,
+            length=1,  # we only need the aggregate total_file_size, not the rows
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_users(self) -> list[dict[str, Any]]:
+        """Return the full list of Plex users known to Tautulli."""
+        data = self.call("get_users")
+        return data if isinstance(data, list) else []
+
+    def get_users_table(self) -> list[dict[str, Any]]:
+        """Return the users-table view (per-user lifetime stats)."""
+        data = self.call("get_users_table", length=1000)
+        if isinstance(data, dict):
+            rows = data.get("data") or []
+            return rows if isinstance(rows, list) else []
+        return []
+
     def get_server_info(self) -> dict[str, Any]:
         """Return the connected Plex Media Server's info (version, name, …)."""
         data = self.call("get_server_info")
+        return data if isinstance(data, dict) else {}
+
+    def get_server_status(self) -> dict[str, Any]:
+        """Return Tautulli's view of the Plex connection status.
+
+        Tautulli's ``server_status`` reports whether its WebSocket to Plex
+        is currently up. Used to drive the ``tautulli_plex_reachable``
+        gauge — distinct from ``tautulli_up`` which only reflects the
+        exporter↔Tautulli link.
+        """
+        data = self.call("server_status")
+        return data if isinstance(data, dict) else {}
+
+    def get_pms_update(self) -> dict[str, Any]:
+        """Return Plex Media Server update info (calls plex.tv via Tautulli).
+
+        Cheap on Tautulli's side but does roundtrip to plex.tv, which is
+        why it lives in the slow meta tier.
+        """
+        data = self.call("get_pms_update")
         return data if isinstance(data, dict) else {}
 
     def get_geoip_lookup(self, ip: str) -> dict[str, Any] | None:

@@ -15,9 +15,44 @@ from .config import Config, ConfigError
 from .geoip import GeoIPLookup
 from .logging_setup import setup_logging
 from .metrics import Metrics
-from .poller import Poller
+from .poller import Tier, TieredPoller
+from .steps import ActivityStep, InventoryStep, MetaStep, StatusStep
 
 log = logging.getLogger("tautulli_exporter")
+
+
+def _build_tiers(client, metrics, config, geoip):
+    """Wire each tier with its steps and cadence.
+
+    Kept as a top-level helper so tests can build a poller with stubbed
+    steps without re-implementing the wiring.
+    """
+    return [
+        Tier(
+            name="activity",
+            interval_seconds=config.activity_poll_interval,
+            steps=[
+                ActivityStep(client, metrics, geoip=geoip),
+                StatusStep(client, metrics),
+            ],
+            heartbeat=True,
+        ),
+        Tier(
+            name="inventory",
+            interval_seconds=config.inventory_poll_interval,
+            steps=[
+                InventoryStep(
+                    client, metrics,
+                    library_size_enabled=config.library_size_enabled,
+                ),
+            ],
+        ),
+        Tier(
+            name="meta",
+            interval_seconds=config.meta_poll_interval,
+            steps=[MetaStep(client, metrics)],
+        ),
+    ]
 
 
 def main() -> int:
@@ -46,7 +81,13 @@ def main() -> int:
     else:
         log.info("GEOIP_ENABLED=false; per-session geolocation metric disabled")
 
-    poller = Poller(client, metrics, config, geoip=geoip)
+    if config.library_size_enabled:
+        log.info(
+            "LIBRARY_SIZE_ENABLED=true; will call get_library_media_info per "
+            "library on every inventory poll (slow on huge libraries)"
+        )
+
+    poller = TieredPoller(metrics, _build_tiers(client, metrics, config, geoip))
 
     stop_event = threading.Event()
 

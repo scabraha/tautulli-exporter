@@ -1,310 +1,292 @@
+"""Tests for the tiered scheduler in `poller.py`."""
+
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
-from tautulli_exporter.poller import Poller
+from tautulli_exporter.poller import Tier, TieredPoller
+
+
+# -- helpers / fixtures ------------------------------------------------
+
+
+class FakeClock:
+    """Deterministic monotonic clock for scheduling tests."""
+
+    def __init__(self, start: float = 1000.0):
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FakeStep:
+    def __init__(self, name: str):
+        self.name = name
+        self.calls = 0
+        self.fail_with: BaseException | None = None
+
+    def run(self) -> None:
+        self.calls += 1
+        if self.fail_with is not None:
+            raise self.fail_with
 
 
 @pytest.fixture
-def fake_client():
-    client = MagicMock()
-    client.get_server_info.return_value = {
-        "pms_version": "1.40.0", "pms_name": "media",
-    }
-    client.get_libraries.return_value = []
-    client.get_activity.return_value = {
-        "stream_count": 0, "sessions": [],
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-    }
-    return client
+def clock():
+    return FakeClock()
 
 
 @pytest.fixture
-def poller(fake_client, metrics, config):
-    return Poller(fake_client, metrics, config)
+def wall_clock():
+    return MagicMock(return_value=1_700_000_000.0)
 
 
-def _read_gauge(metric):
+def _read(metric):
     return metric._value.get()
 
 
-def _label_values(metric) -> dict:
-    return {
-        labels: child._value.get()
-        for labels, child in metric._metrics.items()
-    }
+def _labels(metric) -> dict:
+    return {labels: child._value.get() for labels, child in metric._metrics.items()}
 
 
-# -- inventory + up -------------------------------------------------------
+# -- construction --------------------------------------------------------
 
 
-def test_poll_once_marks_up(poller, metrics):
-    poller.poll_once()
-    assert _read_gauge(metrics.up) == 1
+def test_requires_at_least_one_tier(metrics):
+    with pytest.raises(ValueError, match="at least one tier"):
+        TieredPoller(metrics, [])
 
 
-def test_poll_once_records_plex_version(poller, metrics):
-    poller.poll_once()
-    assert metrics.plex_version_info._value == {
-        "version": "1.40.0", "server_name": "media",
-    }
+def test_requires_exactly_one_heartbeat(metrics):
+    with pytest.raises(ValueError, match="heartbeat"):
+        TieredPoller(metrics, [
+            Tier("a", 10, [FakeStep("a")], heartbeat=False),
+        ])
+    with pytest.raises(ValueError, match="heartbeat"):
+        TieredPoller(metrics, [
+            Tier("a", 10, [FakeStep("a")], heartbeat=True),
+            Tier("b", 10, [FakeStep("b")], heartbeat=True),
+        ])
 
 
-def test_poll_once_marks_down_on_failure(poller, fake_client, metrics):
-    fake_client.get_server_info.side_effect = RuntimeError("boom")
-    poller.poll_once()
-    assert _read_gauge(metrics.up) == 0
+# -- scheduling ----------------------------------------------------------
 
 
-def test_poll_failure_records_step_label(poller, fake_client, metrics):
-    fake_client.get_libraries.side_effect = RuntimeError("api down")
-    poller.poll_once()
-    failures = _label_values(metrics.poll_failures)
-    assert failures[("libraries",)] == 1
+def test_first_poll_runs_every_tier(metrics, clock, wall_clock):
+    a, b, c = FakeStep("a"), FakeStep("b"), FakeStep("c")
+    poller = TieredPoller(
+        metrics,
+        [
+            Tier("activity", 10, [a], heartbeat=True),
+            Tier("inventory", 100, [b]),
+            Tier("meta", 1000, [c]),
+        ],
+        clock=clock, wall_clock=wall_clock,
+    )
+    ran = poller.poll_due()
+    assert sorted(ran) == ["activity", "inventory", "meta"]
+    assert (a.calls, b.calls, c.calls) == (1, 1, 1)
 
 
-def test_poll_success_sets_self_monitoring_metrics(poller, metrics):
-    poller.poll_once()
-    assert _read_gauge(metrics.poll_duration) >= 0
-    assert _read_gauge(metrics.last_successful_poll) > 0
+def test_only_due_tiers_run_after_first_cycle(metrics, clock, wall_clock):
+    a, b, c = FakeStep("a"), FakeStep("b"), FakeStep("c")
+    poller = TieredPoller(
+        metrics,
+        [
+            Tier("activity", 10, [a], heartbeat=True),
+            Tier("inventory", 100, [b]),
+            Tier("meta", 1000, [c]),
+        ],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()  # first cycle: all run
+    clock.advance(15)
+    ran = poller.poll_due()
+    assert ran == ["activity"]   # only the fast one is due
+    assert (a.calls, b.calls, c.calls) == (2, 1, 1)
 
 
-def test_first_success_log_then_recovery_log(poller, fake_client, caplog):
+def test_inventory_runs_on_its_own_cadence(metrics, clock, wall_clock):
+    a, b = FakeStep("a"), FakeStep("b")
+    poller = TieredPoller(
+        metrics,
+        [
+            Tier("activity", 10, [a], heartbeat=True),
+            Tier("inventory", 100, [b]),
+        ],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()  # both run at t=0
+    # Advance enough for the activity tier to fire 10 times before
+    # inventory comes due again.
+    for _ in range(10):
+        clock.advance(10)
+        poller.poll_due()
+    assert a.calls == 11
+    assert b.calls == 2  # initial + once when inventory_interval elapsed
+
+
+def test_seconds_until_next_returns_min(metrics, clock, wall_clock):
+    a, b = FakeStep("a"), FakeStep("b")
+    poller = TieredPoller(
+        metrics,
+        [
+            Tier("activity", 10, [a], heartbeat=True),
+            Tier("inventory", 100, [b]),
+        ],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()  # both run; next deadlines are now+10 and now+100
+    assert poller.seconds_until_next() == pytest.approx(10.0)
+    clock.advance(5)
+    assert poller.seconds_until_next() == pytest.approx(5.0)
+
+
+# -- failure isolation --------------------------------------------------
+
+
+def test_step_failure_isolated_to_step_label(metrics, clock, wall_clock):
+    good = FakeStep("good")
+    bad = FakeStep("bad")
+    bad.fail_with = RuntimeError("boom")
+
+    poller = TieredPoller(
+        metrics,
+        [Tier("activity", 10, [good, bad], heartbeat=True)],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()
+
+    failures = _labels(metrics.poll_failures)
+    assert failures[("bad",)] == 1
+    assert good.calls == 1  # good ran even though bad failed
+
+
+def test_failure_in_non_heartbeat_tier_does_not_flip_up(metrics, clock, wall_clock):
+    good = FakeStep("activity")
+    bad = FakeStep("inventory")
+    bad.fail_with = RuntimeError("db down")
+
+    poller = TieredPoller(
+        metrics,
+        [
+            Tier("activity", 10, [good], heartbeat=True),
+            Tier("inventory", 100, [bad]),
+        ],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()
+
+    assert _read(metrics.up) == 1            # heartbeat tier succeeded
+    assert _labels(metrics.poll_failures)[("inventory",)] == 1
+
+
+def test_heartbeat_failure_marks_down(metrics, clock, wall_clock):
+    bad = FakeStep("activity")
+    bad.fail_with = RuntimeError("api dead")
+
+    poller = TieredPoller(
+        metrics,
+        [Tier("activity", 10, [bad], heartbeat=True)],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()
+    assert _read(metrics.up) == 0
+
+
+def test_heartbeat_success_updates_self_metrics(metrics, clock, wall_clock):
+    wall_clock.return_value = 1_700_000_500.0
+    good = FakeStep("activity")
+    poller = TieredPoller(
+        metrics,
+        [Tier("activity", 10, [good], heartbeat=True)],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()
+    assert _read(metrics.up) == 1
+    assert _read(metrics.last_successful_poll) == 1_700_000_500.0
+    assert _read(metrics.poll_duration) >= 0
+
+
+# -- recovery / first-success logging -----------------------------------
+
+
+def test_first_success_log(metrics, clock, wall_clock, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    poller = TieredPoller(
+        metrics,
+        [Tier("activity", 10, [FakeStep("activity")], heartbeat=True)],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()
+    assert any("First successful poll" in r.message for r in caplog.records)
+
+
+def test_recovery_log(metrics, clock, wall_clock, caplog):
     import logging
     caplog.set_level(logging.INFO)
 
-    poller.poll_once()
-    assert any("First successful poll" in r.message for r in caplog.records)
-    caplog.clear()
-
-    fake_client.get_libraries.side_effect = RuntimeError("api down")
-    poller.poll_once()
-    poller.poll_once()
-    fake_client.get_libraries.side_effect = lambda: []
-    caplog.clear()
-    poller.poll_once()
-    assert any("Recovered after" in r.message for r in caplog.records)
-
-
-# -- libraries ------------------------------------------------------------
-
-
-def test_libraries_total_and_per_library_items(poller, fake_client, metrics):
-    fake_client.get_libraries.return_value = [
-        {"section_name": "Movies", "section_type": "movie", "count": 1500},
-        {"section_name": "TV", "section_type": "show", "count": 250},
-    ]
-    poller.poll_once()
-    assert _read_gauge(metrics.libraries_total) == 2
-    items = _label_values(metrics.library_items)
-    assert items[("Movies", "movie")] == 1500
-    assert items[("TV", "show")] == 250
-
-
-def test_libraries_clears_between_polls(poller, fake_client, metrics):
-    fake_client.get_libraries.return_value = [
-        {"section_name": "Old", "section_type": "movie", "count": 10},
-    ]
-    poller.poll_once()
-    assert ("Old", "movie") in _label_values(metrics.library_items)
-
-    fake_client.get_libraries.return_value = [
-        {"section_name": "New", "section_type": "show", "count": 5},
-    ]
-    poller.poll_once()
-    items = _label_values(metrics.library_items)
-    assert ("Old", "movie") not in items
-    assert items[("New", "show")] == 5
-
-
-# -- activity -------------------------------------------------------------
-
-
-def test_session_count_and_decisions(poller, fake_client, metrics):
-    fake_client.get_activity.return_value = {
-        "stream_count": 3,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [
-            {"transcode_decision": "direct play"},
-            {"transcode_decision": "transcode"},
-            {"transcode_decision": "transcode"},
-        ],
-    }
-    poller.poll_once()
-    assert _read_gauge(metrics.session_count) == 3
-    decisions = _label_values(metrics.sessions_by_decision)
-    assert decisions[("direct play",)] == 1
-    assert decisions[("copy",)] == 0
-    assert decisions[("transcode",)] == 2
-
-
-def test_bandwidth_converted_from_kbps_to_bytes(poller, fake_client, metrics):
-    """Tautulli reports kbps; we expose bytes/s. 8000 kbps -> 1_000_000 bytes/s."""
-    fake_client.get_activity.return_value = {
-        "stream_count": 0, "sessions": [],
-        "total_bandwidth": 8000, "lan_bandwidth": 6000, "wan_bandwidth": 2000,
-    }
-    poller.poll_once()
-    bw = _label_values(metrics.session_bandwidth_bytes)
-    assert bw[("total",)] == 8000 * 1000 // 8
-    assert bw[("lan",)] == 6000 * 1000 // 8
-    assert bw[("wan",)] == 2000 * 1000 // 8
-
-
-def test_session_info_labels_and_bandwidth(poller, fake_client, metrics):
-    fake_client.get_activity.return_value = {
-        "stream_count": 1,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [{
-            "friendly_name": "alice", "player": "Roku", "platform": "tv",
-            "quality_profile": "Original", "full_title": "Inception",
-            "transcode_decision": "direct play", "ip_address": "192.168.1.10",
-            "bandwidth": 16000,
-        }],
-    }
-    poller.poll_once()
-    info = _label_values(metrics.session_info)
-    expected_labels = ("alice", "Roku", "tv", "Original", "Inception",
-                       "direct play", "192.168.1.10")
-    assert info[expected_labels] == 16000 * 1000 // 8
-
-
-def test_session_info_clears_between_polls(poller, fake_client, metrics):
-    fake_client.get_activity.return_value = {
-        "stream_count": 1,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [{"friendly_name": "alice", "full_title": "Inception",
-                      "bandwidth": 0}],
-    }
-    poller.poll_once()
-    assert _label_values(metrics.session_info)
-
-    fake_client.get_activity.return_value = {
-        "stream_count": 0, "sessions": [],
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-    }
-    poller.poll_once()
-    assert _label_values(metrics.session_info) == {}
-
-
-def test_session_info_uses_unknown_for_missing_fields(poller, fake_client, metrics):
-    fake_client.get_activity.return_value = {
-        "stream_count": 1,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [{}],
-    }
-    poller.poll_once()
-    info = _label_values(metrics.session_info)
-    assert (("unknown",) * 6 + ("",)) in info
-
-
-# -- session geo ----------------------------------------------------------
-
-
-def test_session_geo_emitted_when_geoip_resolves(fake_client, metrics, config):
-    geoip = MagicMock()
-    geoip.lookup.return_value = {
-        "city": "Seattle", "region": "WA", "country": "US",
-        "latitude": 47.6, "longitude": -122.3,
-    }
-    poller = Poller(fake_client, metrics, config, geoip=geoip)
-    fake_client.get_activity.return_value = {
-        "stream_count": 1,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [{
-            "friendly_name": "alice", "full_title": "Inception",
-            "transcode_decision": "direct play", "ip_address": "8.8.8.8",
-        }],
-    }
-    poller.poll_once()
-
-    geo = _label_values(metrics.session_geo)
-    assert geo[(
-        "alice", "Inception", "direct play",
-        "Seattle", "WA", "US", "47.6", "-122.3",
-    )] == 1
-
-
-def test_session_geo_records_geoip_lookup_results(fake_client, metrics, config):
-    geoip = MagicMock()
-    geoip.lookup.side_effect = lambda ip: (
-        {"city": "S", "region": "", "country": "US",
-         "latitude": 1.0, "longitude": 2.0}
-        if ip == "8.8.8.8" else None
+    step = FakeStep("activity")
+    poller = TieredPoller(
+        metrics,
+        [Tier("activity", 10, [step], heartbeat=True)],
+        clock=clock, wall_clock=wall_clock,
     )
-    poller = Poller(fake_client, metrics, config, geoip=geoip)
-    fake_client.get_activity.return_value = {
-        "stream_count": 2,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [
-            {"ip_address": "8.8.8.8", "friendly_name": "a"},
-            {"ip_address": "1.1.1.1", "friendly_name": "b"},
-        ],
-    }
-    poller.poll_once()
-    lookups = _label_values(metrics.geoip_lookups)
-    assert lookups[("hit",)] == 1
-    assert lookups[("miss",)] == 1
+
+    # Initial success.
+    poller.poll_due()
+    caplog.clear()
+
+    # Two failures.
+    step.fail_with = RuntimeError("api dead")
+    clock.advance(10); poller.poll_due()
+    clock.advance(10); poller.poll_due()
+    caplog.clear()
+
+    # Recovery.
+    step.fail_with = None
+    clock.advance(10); poller.poll_due()
+    assert any("Recovered after 2" in r.message for r in caplog.records)
 
 
-def test_session_geo_skipped_when_no_geoip(poller, fake_client, metrics):
-    fake_client.get_activity.return_value = {
-        "stream_count": 1,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [{"ip_address": "8.8.8.8", "friendly_name": "a"}],
-    }
-    poller.poll_once()
-    assert _label_values(metrics.session_geo) == {}
+def test_http_error_is_logged_concisely(metrics, clock, wall_clock, caplog):
+    import logging
+    caplog.set_level(logging.ERROR)
+    step = FakeStep("activity")
+    step.fail_with = requests.HTTPError("403 forbidden")
+    poller = TieredPoller(
+        metrics,
+        [Tier("activity", 10, [step], heartbeat=True)],
+        clock=clock, wall_clock=wall_clock,
+    )
+    poller.poll_due()
+    msgs = [r.message for r in caplog.records]
+    assert any("403 forbidden" in m for m in msgs)
 
 
-def test_session_geo_skips_sessions_without_ip(fake_client, metrics, config):
-    geoip = MagicMock()
-    poller = Poller(fake_client, metrics, config, geoip=geoip)
-    fake_client.get_activity.return_value = {
-        "stream_count": 1,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [{"friendly_name": "a"}],
-    }
-    poller.poll_once()
-    geoip.lookup.assert_not_called()
+# -- run_forever shutdown ----------------------------------------------
 
 
-def test_session_geo_clears_between_polls(fake_client, metrics, config):
-    geoip = MagicMock()
-    geoip.lookup.return_value = {
-        "city": "S", "region": "", "country": "US",
-        "latitude": 1.0, "longitude": 2.0,
-    }
-    poller = Poller(fake_client, metrics, config, geoip=geoip)
-    fake_client.get_activity.return_value = {
-        "stream_count": 1,
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-        "sessions": [{"ip_address": "8.8.8.8", "friendly_name": "a",
-                      "full_title": "x", "transcode_decision": "direct play"}],
-    }
-    poller.poll_once()
-    assert _label_values(metrics.session_geo)
-
-    fake_client.get_activity.return_value = {
-        "stream_count": 0, "sessions": [],
-        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
-    }
-    poller.poll_once()
-    assert _label_values(metrics.session_geo) == {}
-
-
-# -- shutdown -------------------------------------------------------------
-
-
-def test_run_forever_stops_on_event(poller, fake_client):
+def test_run_forever_stops_on_event(metrics, clock, wall_clock):
     import threading
     stop = threading.Event()
+    step = FakeStep("activity")
 
-    def stop_after_first(*args, **kwargs):
+    def stop_after_first():
         stop.set()
-        return {"stream_count": 0, "sessions": [],
-                "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0}
+    step.run = MagicMock(side_effect=stop_after_first)
+    step.name = "activity"
 
-    fake_client.get_activity.side_effect = stop_after_first
+    poller = TieredPoller(
+        metrics,
+        [Tier("activity", 10, [step], heartbeat=True)],
+        clock=clock, wall_clock=wall_clock,
+    )
     poller.run_forever(stop)
     assert stop.is_set()
