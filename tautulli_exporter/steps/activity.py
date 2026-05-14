@@ -115,6 +115,7 @@ class ActivityStep:
         # Clearing each per-session metric is what stops "ghost streams"
         # from sticking around after the user closes their player.
         self._metrics.session_info.clear()
+        self._metrics.session_stream_info.clear()
         self._metrics.session_progress_ratio.clear()
         self._metrics.session_transcode_speed_ratio.clear()
         self._metrics.session_throttled.clear()
@@ -123,6 +124,7 @@ class ActivityStep:
 
         for session in sessions:
             self._set_session_info(session)
+            self._set_session_stream_info(session)
             self._set_session_detail(session)
 
         self._update_session_geo(sessions)
@@ -132,6 +134,8 @@ class ActivityStep:
             "user": label_or(session.get("friendly_name")),
             "player": label_or(session.get("player")),
             "platform": label_or(session.get("platform")),
+            "product": label_or(session.get("product")),
+            "product_version": label_or(session.get("product_version")),
             "quality": label_or(session.get("quality_profile")),
             "title": label_or(session.get("full_title")),
             "decision": label_or(session.get("transcode_decision")),
@@ -139,6 +143,32 @@ class ActivityStep:
         }
         bandwidth = to_int(session.get("bandwidth")) * KBPS_TO_BPS
         self._metrics.session_info.labels(**labels).set(bandwidth)
+
+    def _set_session_stream_info(self, session: dict) -> None:
+        # Tautulli prefers the `stream_*_decision` keys for per-stream
+        # transcode decisions but falls back to `video_decision` /
+        # `audio_decision` on older versions; check both.
+        labels = {
+            **session_identity(session),
+            "transcode_decision": label_or(session.get("transcode_decision")),
+            "video_decision": label_or(
+                session.get("stream_video_decision") or session.get("video_decision")
+            ),
+            "audio_decision": label_or(
+                session.get("stream_audio_decision") or session.get("audio_decision")
+            ),
+            "subtitle_decision": label_or(
+                session.get("stream_subtitle_decision")
+                or session.get("subtitle_decision")
+            ),
+            "video_codec": label_or(session.get("video_codec")),
+            "stream_video_codec": label_or(session.get("stream_video_codec")),
+            "audio_codec": label_or(session.get("audio_codec")),
+            "stream_audio_codec": label_or(session.get("stream_audio_codec")),
+            "container": label_or(session.get("container")),
+            "stream_container": label_or(session.get("stream_container")),
+        }
+        self._metrics.session_stream_info.labels(**labels).set(1)
 
     def _set_session_detail(self, session: dict) -> None:
         ident = session_identity(session)
