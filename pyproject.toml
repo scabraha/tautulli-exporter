@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tautulli-exporter"
-version = "2.0.0"
+version = "2.0.1"
 description = "Prometheus exporter for Tautulli (Plex) playback activity and library statistics"
 readme = "README.md"
 license = { file = "LICENSE" }
