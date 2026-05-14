@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.0](https://github.com/scabraha/tautulli-exporter/compare/v2.0.1...v2.1.0) (2026-05-14)
+
+
+### Features
+
+* expose per-session product/version and codec breakdown ([3827a27](https://github.com/scabraha/tautulli-exporter/commit/3827a278152ff8aa65ad3360592f574d96dfeac5))
+* expose per-session product/version and codec breakdown ([1ad1752](https://github.com/scabraha/tautulli-exporter/commit/1ad1752c731d3489125673b293c2a34558497357))
+
 ## [2.0.1](https://github.com/scabraha/tautulli-exporter/compare/v2.0.0...v2.0.1) (2026-05-14)
 
 
