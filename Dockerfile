@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.24
 
 FROM python:3.13-alpine AS builder
 WORKDIR /build
