@@ -36,6 +36,7 @@ Each tier reports failures independently via `tautulli_exporter_poll_failures_to
 | `tautulli_session_transcode_hw` | Gauge | `user`, `title`, `direction` | `1` when HW-accelerated `decode` / `encode` is active |
 | `tautulli_session_geo` | Gauge | `user`, `title`, `decision`, `city`, `region`, `country`, `latitude`, `longitude` | Per-session geo (only when `GEOIP_ENABLED=true`); value is `1` |
 | `tautulli_plex_reachable` | Gauge | — | `1` if Tautulli currently has a working connection to Plex |
+| `tautulli_plex_server_start_timestamp_seconds` | Gauge | — | Approximate Unix timestamp Plex Media Server most recently started, derived from observed reachability transitions; `0` until first reachable observation |
 
 ### Inventory (refreshed every `INVENTORY_POLL_INTERVAL`)
 
@@ -151,6 +152,9 @@ rate(tautulli_exporter_poll_failures_total[10m]) > 0
 
 # Plex Media Server has an update pending
 tautulli_plex_update_available == 1
+
+# Plex Media Server uptime in seconds (only meaningful while reachable)
+(time() - tautulli_plex_server_start_timestamp_seconds) and on(instance) tautulli_plex_reachable == 1
 
 # Transcode is falling behind real-time
 tautulli_session_transcode_speed_ratio < 1

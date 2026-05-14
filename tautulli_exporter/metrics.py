@@ -120,6 +120,24 @@ class Metrics:
             registry=registry,
         )
 
+        # Plex Media Server start time, derived from observed reachability
+        # transitions (Tautulli/Plex don't expose a real PMS uptime field).
+        # 0 until the exporter has observed Plex come up at least once;
+        # then anchored to the wall-clock time of either the first
+        # reachable observation or the most recent down→up transition.
+        # Dashboards compute uptime via `time() - <metric>` and should
+        # gate on `tautulli_plex_reachable == 1` to avoid showing
+        # ever-growing "uptime" during a real Plex outage.
+        self.plex_server_start_timestamp_seconds = Gauge(
+            "tautulli_plex_server_start_timestamp_seconds",
+            (
+                "Approximate Unix timestamp Plex Media Server most recently "
+                "started, derived from exporter-observed reachability "
+                "transitions (0 until first observation)"
+            ),
+            registry=registry,
+        )
+
         # =====================================================================
         # Tier 2 — inventory loop (~5 min)
         # =====================================================================
