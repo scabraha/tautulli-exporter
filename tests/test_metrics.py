@@ -28,7 +28,20 @@ def _expect_labels(metric, expected: tuple[str, ...]):
 def test_session_info_labels(metrics):
     _expect_labels(
         metrics.session_info,
-        ("user", "player", "platform", "quality", "title", "decision", "ip"),
+        ("user", "player", "platform", "product", "product_version",
+         "quality", "title", "decision", "ip"),
+    )
+
+
+def test_session_stream_info_labels(metrics):
+    _expect_labels(
+        metrics.session_stream_info,
+        ("user", "title",
+         "transcode_decision", "video_decision", "audio_decision",
+         "subtitle_decision",
+         "video_codec", "stream_video_codec",
+         "audio_codec", "stream_audio_codec",
+         "container", "stream_container"),
     )
 
 

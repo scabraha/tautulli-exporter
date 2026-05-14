@@ -132,6 +132,7 @@ def test_session_info_labels_and_bandwidth(step, fake_client, metrics):
         "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
         "sessions": [{
             "friendly_name": "alice", "player": "Roku", "platform": "tv",
+            "product": "Plex for Roku", "product_version": "8.1.0",
             "quality_profile": "Original", "full_title": "Inception",
             "transcode_decision": "direct play", "ip_address": "192.168.1.10",
             "bandwidth": 16000,
@@ -139,8 +140,8 @@ def test_session_info_labels_and_bandwidth(step, fake_client, metrics):
     }
     step.run()
     info = _labels(metrics.session_info)
-    expected_labels = ("alice", "Roku", "tv", "Original", "Inception",
-                       "direct play", "192.168.1.10")
+    expected_labels = ("alice", "Roku", "tv", "Plex for Roku", "8.1.0",
+                       "Original", "Inception", "direct play", "192.168.1.10")
     assert info[expected_labels] == 16000 * 1000 // 8
 
 
@@ -170,7 +171,80 @@ def test_session_info_uses_unknown_for_missing_fields(step, fake_client, metrics
     }
     step.run()
     info = _labels(metrics.session_info)
-    assert (("unknown",) * 6 + ("",)) in info
+    assert (("unknown",) * 8 + ("",)) in info
+
+
+def test_session_stream_info_emitted(step, fake_client, metrics):
+    fake_client.get_activity.return_value = {
+        "stream_count": 1,
+        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
+        "sessions": [{
+            "friendly_name": "alice", "full_title": "Inception",
+            "transcode_decision": "transcode",
+            "stream_video_decision": "transcode",
+            "stream_audio_decision": "direct play",
+            "stream_subtitle_decision": "burn",
+            "video_codec": "hevc", "stream_video_codec": "h264",
+            "audio_codec": "eac3", "stream_audio_codec": "aac",
+            "container": "mkv", "stream_container": "mp4",
+        }],
+    }
+    step.run()
+    stream_info = _labels(metrics.session_stream_info)
+    expected = (
+        "alice", "Inception",
+        "transcode", "transcode", "direct play", "burn",
+        "hevc", "h264", "eac3", "aac", "mkv", "mp4",
+    )
+    assert stream_info[expected] == 1
+
+
+def test_session_stream_info_falls_back_to_legacy_decision_keys(
+    step, fake_client, metrics,
+):
+    # Older Tautulli responses only ship `video_decision` / `audio_decision`
+    # without the `stream_*_decision` siblings; make sure we still surface them.
+    fake_client.get_activity.return_value = {
+        "stream_count": 1,
+        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
+        "sessions": [{
+            "friendly_name": "alice", "full_title": "Inception",
+            "transcode_decision": "transcode",
+            "video_decision": "copy",
+            "audio_decision": "transcode",
+            "subtitle_decision": "direct play",
+        }],
+    }
+    step.run()
+    stream_info = _labels(metrics.session_stream_info)
+    # video_decision / audio_decision / subtitle_decision come from the
+    # legacy keys; codec/container default to "unknown".
+    expected = (
+        "alice", "Inception",
+        "transcode", "copy", "transcode", "direct play",
+        "unknown", "unknown", "unknown", "unknown", "unknown", "unknown",
+    )
+    assert stream_info[expected] == 1
+
+
+def test_session_stream_info_clears_between_polls(step, fake_client, metrics):
+    fake_client.get_activity.return_value = {
+        "stream_count": 1,
+        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
+        "sessions": [{
+            "friendly_name": "alice", "full_title": "Inception",
+            "video_codec": "h264",
+        }],
+    }
+    step.run()
+    assert _labels(metrics.session_stream_info)
+
+    fake_client.get_activity.return_value = {
+        "stream_count": 0, "sessions": [],
+        "total_bandwidth": 0, "lan_bandwidth": 0, "wan_bandwidth": 0,
+    }
+    step.run()
+    assert _labels(metrics.session_stream_info) == {}
 
 
 def test_session_progress_ratio_clamped_and_zero_when_no_duration(

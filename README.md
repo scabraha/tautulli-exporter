@@ -29,7 +29,8 @@ Each tier reports failures independently via `tautulli_exporter_poll_failures_to
 | `tautulli_sessions_by_media_type` | Gauge | `media_type` | Sessions by media type (`movie` / `episode` / `track` / `live` / `clip`) |
 | `tautulli_sessions_secure` | Gauge | — | Sessions using a TLS-encrypted connection to Plex |
 | `tautulli_session_bandwidth_bytes` | Gauge | `scope` | Current bandwidth in bytes/s (`total` / `lan` / `wan`) |
-| `tautulli_session_info` | Gauge | `user`, `player`, `platform`, `quality`, `title`, `decision`, `ip` | Per-session info; value is the session's bandwidth in bytes/s |
+| `tautulli_session_info` | Gauge | `user`, `player`, `platform`, `product`, `product_version`, `quality`, `title`, `decision`, `ip` | Per-session info; value is the session's bandwidth in bytes/s. `product`/`product_version` identify the Plex client app (e.g. `Plex for Apple TV` / `8.1.0`) — distinct from `platform` (the OS) |
+| `tautulli_session_stream_info` | Gauge | `user`, `title`, `transcode_decision`, `video_decision`, `audio_decision`, `subtitle_decision`, `video_codec`, `stream_video_codec`, `audio_codec`, `stream_audio_codec`, `container`, `stream_container` | Per-session codec / container / per-stream transcode-decision breakdown. Value is always `1`. Lets you answer "which sessions are transcoding because of audio?" or "what source codec is forcing transcodes?" — join to `tautulli_session_info` on `(user, title)` |
 | `tautulli_session_progress_ratio` | Gauge | `user`, `title` | Playback position (0.0 – 1.0) |
 | `tautulli_session_transcode_speed_ratio` | Gauge | `user`, `title` | Transcoder speed; `< 1.0` means falling behind real-time |
 | `tautulli_session_throttled` | Gauge | `user`, `title` | `1` when the transcoder is throttled (client buffer full) |
@@ -128,7 +129,7 @@ To suppress the metric entirely (and the corresponding Tautulli API calls), set 
 
 ### Cardinality notes
 
-`tautulli_session_info` and `tautulli_session_geo` carry per-session labels (`user`, `title`, IP). For typical home/small-team Plex deployments this is fine. If you have hundreds of concurrent unique titles being played, watch the time-series count and consider scraping less frequently or dropping high-churn labels via Prometheus relabelling.
+`tautulli_session_info`, `tautulli_session_stream_info`, and `tautulli_session_geo` carry per-session labels (`user`, `title`, IP). For typical home/small-team Plex deployments this is fine. If you have hundreds of concurrent unique titles being played, watch the time-series count and consider scraping less frequently or dropping high-churn labels via Prometheus relabelling.
 
 Per-user metrics (`tautulli_user_*`) and per-library metrics (`tautulli_library_*`) scale with your user/library counts — typically <50 and <20 respectively, so they're trivial.
 

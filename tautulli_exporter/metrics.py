@@ -73,7 +73,30 @@ class Metrics:
         self.session_info = Gauge(
             "tautulli_session_info",
             "Per-session information; value is the session bandwidth in bytes/s",
-            ["user", "player", "platform", "quality", "title", "decision", "ip"],
+            [
+                "user", "player", "platform", "product", "product_version",
+                "quality", "title", "decision", "ip",
+            ],
+            registry=registry,
+        )
+        # Codec / container / per-stream-decision breakdown. Separate from
+        # session_info so dashboards graphing bandwidth don't have to carry
+        # 10 extra label dimensions, and so the codec slice can be queried
+        # independently. Joined to session_info on (user, title).
+        self.session_stream_info = Gauge(
+            "tautulli_session_stream_info",
+            (
+                "Per-session codec, container, and per-stream transcode decisions; "
+                "value is always 1"
+            ),
+            [
+                "user", "title",
+                "transcode_decision", "video_decision", "audio_decision",
+                "subtitle_decision",
+                "video_codec", "stream_video_codec",
+                "audio_codec", "stream_audio_codec",
+                "container", "stream_container",
+            ],
             registry=registry,
         )
         self.session_progress_ratio = Gauge(
