@@ -7,7 +7,8 @@
     {
       "matchUpdateTypes": [
         "minor",
-        "patch"
+        "patch",
+        "major"
       ],
       "automerge": true
     }
