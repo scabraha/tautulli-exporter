@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/scabraha/tautulli-exporter/compare/v2.1.0...v2.1.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* **deps:** update dependency requests to v2.34.2 ([#27](https://github.com/scabraha/tautulli-exporter/issues/27)) ([7153366](https://github.com/scabraha/tautulli-exporter/commit/715336698e5bb659997df5e36a3b502c6813d23c))
+
 ## [2.1.0](https://github.com/scabraha/tautulli-exporter/compare/v2.0.1...v2.1.0) (2026-05-14)
 
 
