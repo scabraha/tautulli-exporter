@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.2](https://github.com/scabraha/tautulli-exporter/compare/v2.1.1...v2.1.2) (2026-06-24)
+
+
+### Miscellaneous
+
+* release 2.1.2 ([5ddb437](https://github.com/scabraha/tautulli-exporter/commit/5ddb4375c0008fd8c80f014014f15fcce0d42e06))
+
 ## [2.1.1](https://github.com/scabraha/tautulli-exporter/compare/v2.1.0...v2.1.1) (2026-05-15)
 
 
