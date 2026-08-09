@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.3](https://github.com/scabraha/tautulli-exporter/compare/v2.1.2...v2.1.3) (2026-07-31)
+
+
+### Bug Fixes
+
+* **deps:** update dependency prometheus-client to v0.26.0 ([#33](https://github.com/scabraha/tautulli-exporter/issues/33)) ([54744bc](https://github.com/scabraha/tautulli-exporter/commit/54744bc29627c2f31a281e6c4f59948be4616db2))
+
 ## [2.1.2](https://github.com/scabraha/tautulli-exporter/compare/v2.1.1...v2.1.2) (2026-06-24)
 
 
